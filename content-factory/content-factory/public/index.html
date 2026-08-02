@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Content Factory - Overview</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <nav class="topnav">
+    <div class="brand">Content Factory</div>
+        <div class="navlinks">
+      <a href="/index.html" class="active">Overview</a>
+      <a href="/stories.html">Story review</a>
+      <a href="/queue.html">Approval queue</a>
+      <a href="/agents.html">Agents</a>
+      <a href="/analytics.html">Analytics</a>
+      <a href="/pipeline.html">Pipeline</a>
+      <a href="/channels.html">Channels</a>
+      <a href="/settings.html">Settings</a>
+    </div>
+    <button class="logout" onclick="logout()">Log out</button>
+  </nav>
+
+  <main class="page">
+    <h1>Overview</h1>
+    <div id="modeBanner"></div>
+    <div class="summary-row">
+      <div class="summary-card">
+        <div class="summary-number" id="pendingCount">-</div>
+        <div class="summary-label">Videos waiting for your approval</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-number" id="todayCount">-</div>
+        <div class="summary-label">Pipeline events today</div>
+      </div>
+    </div>
+
+    <h2>Channels</h2>
+    <div id="channelGrid" class="channel-grid"></div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    async function load() {
+      const s = await api('/api/settings');
+      if (s) {
+        document.getElementById('modeBanner').innerHTML = s.testMode
+          ? '<div class="reasoning-box">You are in <strong>TEST MODE</strong> - nothing costs money, nothing really publishes. <a href="/settings.html">Change this</a></div>'
+          : '<div class="cost-row"><span class="badge badge-green">REAL MODE</span> - real spend, real publishing is active. <a href="/settings.html">Change this</a></div>';
+      }
+      const data = await api('/api/overview');
+      if (!data) return;
+      document.getElementById('pendingCount').textContent = data.pendingReview;
+      document.getElementById('todayCount').textContent = data.activityToday;
+
+      const stages = ['sourced','scripted','voiced','assembled','pending_review','approved','scheduled','published','rejected'];
+      const grid = document.getElementById('channelGrid');
+      grid.innerHTML = data.channels.map(ch => `
+        <div class="channel-card">
+          <h3>${ch.name}</h3>
+          <div class="stage-bars">
+            ${stages.map(s => `
+              <div class="stage-row">
+                <span class="stage-name">${s.replace('_',' ')}</span>
+                <span class="stage-count">${ch.stageCounts[s] || 0}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `).join('') || '<p>No channels yet. Add one on the Channels page.</p>';
+    }
+    load();
+  </script>
+</body>
+</html>
