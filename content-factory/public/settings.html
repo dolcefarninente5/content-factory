@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Content Factory - Settings</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <nav class="topnav">
+    <div class="brand">Content Factory</div>
+    <div class="navlinks">
+      <a href="/index.html">Overview</a>
+      <a href="/stories.html">Story review</a>
+      <a href="/queue.html">Approval queue</a>
+      <a href="/agents.html">Agents</a>
+      <a href="/analytics.html">Analytics</a>
+      <a href="/pipeline.html">Pipeline</a>
+      <a href="/channels.html">Channels</a>
+      <a href="/settings.html" class="active">Settings</a>
+    </div>
+    <button class="logout" onclick="logout()">Log out</button>
+  </nav>
+
+  <main class="page">
+    <h1>Settings</h1>
+
+    <div class="channel-detail-card">
+      <h3>Mode</h3>
+      <p class="subtitle" style="margin-top:0">Test Mode uses fake, instant, free outputs for every stage - script, voice, visuals, and "publishing" - so you can click through the whole pipeline without spending anything or needing real API keys. Switch to Real Mode when you're ready to spend real money and actually publish.</p>
+      <div id="modeStatus" style="margin:12px 0;font-size:15px;font-weight:500"></div>
+      <button class="run-btn" onclick="toggleMode()">Switch mode</button>
+    </div>
+
+    <h2>YouTube</h2>
+    <div class="channel-detail-card">
+      <p class="subtitle" style="margin-top:0">Shared across all channels - set this up once, then use the "Connect YouTube" button on each channel's row on the Channels page (no terminal needed).</p>
+      <label>Client ID<br><input type="text" id="ytClientId" style="width:100%;margin-top:4px"></label>
+      <label style="display:block;margin-top:10px">Client Secret<br><input type="password" id="ytClientSecret" style="width:100%;margin-top:4px"></label>
+      <button class="run-btn" style="margin-top:10px" onclick="saveYoutubeCreds()">Save</button>
+      <p id="ytStatus" style="margin-top:8px;font-size:13px"></p>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    let currentTestMode = true;
+
+    async function load() {
+      const s = await api('/api/settings');
+      if (!s) return;
+      currentTestMode = s.testMode;
+      document.getElementById('modeStatus').innerHTML = currentTestMode
+        ? '<span class="badge badge-amber">TEST MODE</span> - nothing costs money, nothing really publishes'
+        : '<span class="badge badge-green">REAL MODE</span> - real API calls, real spend, real YouTube uploads';
+      document.getElementById('ytClientId').value = s.ytClientId || '';
+      document.getElementById('ytStatus').textContent = s.ytClientConfigured ? 'YouTube client credentials are set.' : 'Not set yet.';
+    }
+
+    async function toggleMode() {
+      if (currentTestMode) {
+        if (!confirm('Switch to REAL MODE? This will start spending real money on API calls and can actually publish to YouTube.')) return;
+      }
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testMode: !currentTestMode }),
+      });
+      load();
+    }
+
+    async function saveYoutubeCreds() {
+      const ytClientId = document.getElementById('ytClientId').value;
+      const ytClientSecret = document.getElementById('ytClientSecret').value;
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ytClientId, ytClientSecret }),
+      });
+      load();
+    }
+
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Content Factory - Story Review</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <nav class="topnav">
+    <div class="brand">Content Factory</div>
+    <div class="navlinks">
+      <a href="/index.html">Overview</a>
+      <a href="/stories.html" class="active">Story review</a>
+      <a href="/queue.html">Approval queue</a>
+      <a href="/agents.html">Agents</a>
+      <a href="/analytics.html">Analytics</a>
+      <a href="/pipeline.html">Pipeline</a>
+      <a href="/channels.html">Channels</a>
+      <a href="/settings.html">Settings</a>
+    </div>
+    <button class="logout" onclick="logout()">Log out</button>
+  </nav>
+
+  <main class="page">
+    <h1>Story review</h1>
+    <p class="subtitle">This is the spend gate. Nothing here has cost you anything yet. Score a story, read why the agent rated it that way, check the cost/return estimate, then decide if it's worth producing.</p>
+    <div id="storyList"></div>
+
+    <h2>Submit a new story</h2>
+    <div class="form-card">
+      <select id="newChannel"></select>
+      <textarea id="newAngle" placeholder="Angle (optional, e.g. 'betrayal', 'witchcraft', 'family scandal')"></textarea>
+      <textarea id="newSource" placeholder="Paste the raw submitted story text here" style="min-height:100px"></textarea>
+      <button onclick="addStory()">Submit story</button>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    async function loadChannelOptions() {
+      const channels = await api('/api/channels');
+      document.getElementById('newChannel').innerHTML = channels.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    }
+
+    function scoreBadgeClass(score) {
+      if (score === null || score === undefined) return 'badge-gray';
+      if (score >= 70) return 'badge-green';
+      if (score >= 45) return 'badge-amber';
+      return 'badge-red';
+    }
+
+    async function load() {
+      const stories = await api('/api/stories?produce_status=pending');
+      const container = document.getElementById('storyList');
+      if (!stories || stories.length === 0) {
+        container.innerHTML = '<p class="empty">No candidate stories waiting on a decision.</p>';
+        return;
+      }
+      container.innerHTML = stories.map(s => {
+        const roi = (s.est_revenue !== null && s.est_cost !== null) ? (s.est_revenue - s.est_cost) : null;
+        return `
+        <div class="review-card" id="story-${s.id}">
+          <div class="review-header">
+            <span class="channel-tag">${s.channel_name}</span>
+            ${s.score !== null ? `<span class="badge ${scoreBadgeClass(s.score)}">${s.score}/100</span>` : '<span class="badge badge-gray">not scored</span>'}
+            ${s.angle ? `<span class="angle-tag">${s.angle}</span>` : ''}
+          </div>
+          <p class="source-text">${(s.source_text || '').replace(/</g,'&lt;')}</p>
+          ${s.reasoning ? `<div class="reasoning-box"><strong>Agent reasoning:</strong> ${s.reasoning}</div>` : ''}
+          ${s.est_cost !== null ? `
+            <div class="cost-row">
+              <span>Est. cost: <strong>$${s.est_cost}</strong></span>
+              <span>Est. views: <strong>${s.est_views ?? '-'}</strong></span>
+              <span>Est. revenue: <strong>$${s.est_revenue}</strong></span>
+              <span class="${roi >= 0 ? 'roi-positive' : 'roi-negative'}">Est. return: <strong>${roi >= 0 ? '+' : ''}$${roi}</strong></span>
+            </div>
+          ` : ''}
+          <div class="review-actions">
+            <div class="button-row">
+              ${s.score === null ? `<button class="score-btn" onclick="scoreStory(${s.id})">Score this story</button>` : ''}
+              <button class="approve-btn" onclick="approveProduction(${s.id})" ${s.score === null ? 'disabled' : ''}>Approve for production</button>
+              <button class="reject-btn" onclick="rejectProduction(${s.id})">Reject</button>
+            </div>
+          </div>
+        </div>
+      `}).join('');
+    }
+
+    async function scoreStory(id) {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = 'Scoring...';
+      const res = await fetch(`/api/stories/${id}/score`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || 'Scoring failed');
+      }
+      load();
+    }
+
+    async function approveProduction(id) {
+      const res = await fetch(`/api/stories/${id}/approve-production`, { method: 'POST' });
+      if (res.ok) {
+        document.getElementById(`story-${id}`).remove();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Could not approve');
+      }
+    }
+
+    async function rejectProduction(id) {
+      const reason = prompt('Why are you rejecting this one? (helps you spot patterns later)');
+      if (reason === null) return;
+      await fetch(`/api/stories/${id}/reject-production`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      });
+      document.getElementById(`story-${id}`).remove();
+    }
+
+    async function addStory() {
+      const body = {
+        channel_id: document.getElementById('newChannel').value,
+        angle: document.getElementById('newAngle').value,
+        source_text: document.getElementById('newSource').value,
+      };
+      if (!body.source_text) { alert('Paste the story text first'); return; }
+      await fetch('/api/stories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      document.getElementById('newAngle').value = '';
+      document.getElementById('newSource').value = '';
+      load();
+    }
+
+    loadChannelOptions();
+    load();
+  </script>
+</body>
+</html>
