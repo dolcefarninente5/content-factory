@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Content Factory - Analytics</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <nav class="topnav">
+    <div class="brand">Content Factory</div>
+    <div class="navlinks">
+      <a href="/index.html">Overview</a>
+      <a href="/stories.html">Story review</a>
+      <a href="/queue.html">Approval queue</a>
+      <a href="/agents.html">Agents</a>
+      <a href="/analytics.html" class="active">Analytics</a>
+      <a href="/pipeline.html">Pipeline</a>
+      <a href="/channels.html">Channels</a>
+      <a href="/settings.html">Settings</a>
+    </div>
+    <button class="logout" onclick="logout()">Log out</button>
+  </nav>
+
+  <main class="page">
+    <h1>Analytics</h1>
+
+    <h2>Server status</h2>
+    <div id="serverStatus" class="summary-row"></div>
+
+    <h2>Real spend (actual dollars, not estimates)</h2>
+    <div id="realSpend"></div>
+
+    <h2>Spend vs. return, per channel</h2>
+    <p class="subtitle">Actual views/revenue only populate once the analytics agent is wired to YouTube Analytics. Until then this shows estimated figures from the story review gate.</p>
+    <div id="channelAnalytics"></div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    async function loadHealth() {
+      const res = await fetch('/api/health');
+      const health = await res.json();
+      const hours = Math.floor(health.uptimeSeconds / 3600);
+      const mins = Math.floor((health.uptimeSeconds % 3600) / 60);
+      document.getElementById('serverStatus').innerHTML = `
+        <div class="summary-card">
+          <div class="summary-number" style="color:#27500a">● live</div>
+          <div class="summary-label">Server status</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-number">${hours}h ${mins}m</div>
+          <div class="summary-label">Uptime since last restart</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-number" style="font-size:15px">${health.nodeVersion}</div>
+          <div class="summary-label">Node version</div>
+        </div>
+      `;
+    }
+
+    async function loadChannelAnalytics() {
+      const data = await api('/api/analytics/overview');
+      if (!data) return;
+      document.getElementById('channelAnalytics').innerHTML = data.perChannel.map(row => {
+        const spend = row.totalEstCost || 0;
+        const revenue = row.totalActualRevenue || row.totalEstRevenue || 0;
+        const net = revenue - spend;
+        const hasReal = row.totalActualViews > 0;
+        return `
+        <div class="channel-detail-card">
+          <h3>${row.channel.name}</h3>
+          <div class="analytics-grid">
+            <div><span class="stat-label">Videos in pipeline</span><span class="stat-value">${row.videoCount}</span></div>
+            <div><span class="stat-label">Published</span><span class="stat-value">${row.publishedCount}</span></div>
+            <div><span class="stat-label">${hasReal ? 'Actual views' : 'Est. views (no real data yet)'}</span><span class="stat-value">${hasReal ? row.totalActualViews : (row.rollingStats ? Math.round(row.rollingStats.avg_views_per_video) : '-')}</span></div>
+            <div><span class="stat-label">Total est. spend</span><span class="stat-value">$${spend.toFixed(2)}</span></div>
+            <div><span class="stat-label">${hasReal ? 'Actual revenue' : 'Est. revenue'}</span><span class="stat-value">$${revenue.toFixed(2)}</span></div>
+            <div><span class="stat-label">Net</span><span class="stat-value ${net >= 0 ? 'roi-positive' : 'roi-negative'}">${net >= 0 ? '+' : ''}$${net.toFixed(2)}</span></div>
+          </div>
+        </div>
+      `}).join('') || '<p class="empty">No channels yet.</p>';
+    }
+
+    async function loadSpend() {
+      const data = await api('/api/spend');
+      if (!data) return;
+      const realRows = data.byProvider.filter(r => r.test_mode === 0);
+      const testRows = data.byProvider.filter(r => r.test_mode === 1);
+      document.getElementById('realSpend').innerHTML = `
+        <div class="summary-row">
+          <div class="summary-card">
+            <div class="summary-number">$${data.totalReal.toFixed(2)}</div>
+            <div class="summary-label">Total real spend so far</div>
+          </div>
+        </div>
+        ${realRows.length ? `
+          <table style="width:100%;border-collapse:collapse;margin-top:10px">
+            <tr style="text-align:left;font-size:12px;color:#888780"><th>Provider</th><th>Calls</th><th>Amount</th></tr>
+            ${realRows.map(r => `<tr style="font-size:14px"><td>${r.provider}</td><td>${r.calls}</td><td>$${r.total.toFixed(4)}</td></tr>`).join('')}
+          </table>` : '<p class="empty">No real spend yet.</p>'}
+        ${testRows.length ? `<p class="subtitle" style="margin-top:12px">Plus ${testRows.reduce((s,r)=>s+r.calls,0)} test-mode calls (no real cost).</p>` : ''}
+      `;
+    }
+
+    loadHealth();
+    loadChannelAnalytics();
+    loadSpend();
+  </script>
+</body>
+</html>

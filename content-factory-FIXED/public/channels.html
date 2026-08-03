@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Content Factory - Channels</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <nav class="topnav">
+    <div class="brand">Content Factory</div>
+        <div class="navlinks">
+      <a href="/index.html">Overview</a>
+      <a href="/stories.html">Story review</a>
+      <a href="/queue.html">Approval queue</a>
+      <a href="/agents.html">Agents</a>
+      <a href="/analytics.html">Analytics</a>
+      <a href="/pipeline.html">Pipeline</a>
+      <a href="/channels.html" class="active">Channels</a>
+      <a href="/settings.html">Settings</a>
+    </div>
+    <button class="logout" onclick="logout()">Log out</button>
+  </nav>
+
+  <main class="page">
+    <h1>Channels</h1>
+    <p class="subtitle">Each channel needs its own persona and voice to stay differentiated - see the setup notes in the README.</p>
+    <div id="banner"></div>
+    <div id="channelList"></div>
+
+    <h2>Add a channel</h2>
+    <div class="form-card">
+      <input id="newName" placeholder="Channel name" />
+      <textarea id="newPersona" placeholder="Persona / tone (e.g. 'older sister giving advice, warm, uses lah/wallah often')"></textarea>
+      <input id="newVoice" placeholder="Voice ID (from ElevenLabs, once you've cloned one)" />
+      <textarea id="newImageStyle" placeholder="Visual style (e.g. 'warm cinematic realism, soft evening light')"></textarea>
+      <input id="newDays" placeholder="Upload days, e.g. mon,thu" />
+      <button onclick="addChannel()">Add channel</button>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('youtube_connected')) {
+      document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('banner').innerHTML = `<div class="reasoning-box">Channel ${params.get('youtube_connected')} connected to YouTube.</div>`;
+      });
+    }
+
+    async function load() {
+      const channels = await api('/api/channels');
+      document.getElementById('channelList').innerHTML = channels.map(ch => `
+        <div class="channel-detail-card">
+          <h3>${ch.name} ${ch.active ? '' : '<span class="inactive-tag">inactive</span>'}</h3>
+          <p><strong>Persona:</strong> ${ch.persona || '(not set)'}</p>
+          <p><strong>Voice ID:</strong> ${ch.voice_id || '(not set)'}</p>
+          <p><strong>Visual style:</strong> ${ch.image_style_prompt || '(not set)'}</p>
+          <p><strong>Upload days:</strong> ${ch.upload_days}</p>
+          <p>
+            <strong>YouTube:</strong>
+            ${ch.youtube_refresh_token
+              ? '<span class="badge badge-green">connected</span>'
+              : `<span class="badge badge-gray">not connected</span> <a href="/api/channels/${ch.id}/youtube/connect" class="run-btn" style="text-decoration:none;display:inline-block;margin-left:6px">Connect YouTube</a>`}
+          </p>
+        </div>
+      `).join('') || '<p class="empty">No channels yet.</p>';
+    }
+
+    async function addChannel() {
+      const body = {
+        name: document.getElementById('newName').value,
+        persona: document.getElementById('newPersona').value,
+        voice_id: document.getElementById('newVoice').value,
+        upload_days: document.getElementById('newDays').value || 'mon,thu',
+      };
+      if (!body.name) { alert('Channel name is required'); return; }
+      const res = await fetch('/api/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const { id } = await res.json();
+      const imageStyle = document.getElementById('newImageStyle').value;
+      if (imageStyle) {
+        await fetch(`/api/channels/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, image_style_prompt: imageStyle, active: 1 }),
+        });
+      }
+      document.getElementById('newName').value = '';
+      document.getElementById('newPersona').value = '';
+      document.getElementById('newVoice').value = '';
+      document.getElementById('newImageStyle').value = '';
+      document.getElementById('newDays').value = '';
+      load();
+    }
+
+    load();
+  </script>
+</body>
+</html>
