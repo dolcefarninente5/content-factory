@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const { ffmpegPath, ffprobePath } = require('../config/ffmpeg');
 const util = require('util');
 const execFileAsync = util.promisify(execFile);
 
@@ -18,7 +19,7 @@ async function mockSynthesizeVoice({ outputPath }) {
   // A few seconds of silence-adjacent tone, just so assembly has a real
   // audio file with a real duration to work against.
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  await execFileAsync('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=8', outputPath]);
+  await execFileAsync(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=8', outputPath]);
   return outputPath;
 }
 
@@ -28,7 +29,7 @@ async function mockGenerateImages({ count = 6, outputDir }) {
   const paths = [];
   for (let i = 0; i < count; i++) {
     const filePath = path.join(outputDir, `scene-${String(i + 1).padStart(2, '0')}.png`);
-    await execFileAsync('ffmpeg', ['-y', '-f', 'lavfi', '-i', `color=c=${colors[i % colors.length]}:s=1280x720`, '-frames:v', '1', filePath]);
+    await execFileAsync(ffmpegPath, ['-y', '-f', 'lavfi', '-i', `color=c=${colors[i % colors.length]}:s=1280x720`, '-frames:v', '1', filePath]);
     paths.push(filePath);
   }
   return paths;

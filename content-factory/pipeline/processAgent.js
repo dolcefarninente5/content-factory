@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const db = require('../db/db');
 const { COST_MODEL } = require('../config/costModel');
-const { isTestMode } = require('../config/settings');
+const { isTestMode, isAutoScript, checkBudget } = require('../config/settings');
 
 function logActivity(videoId, action, detail) {
   db.prepare('INSERT INTO activity_log (video_id, action, detail) VALUES (?, ?, ?)').run(
@@ -62,7 +62,44 @@ function nextUploadSlot(channelId, uploadDaysStr) {
 // { message } on success/no-op, throws on failure (caller records the
 // failure onto agent_status - this function doesn't touch agent_status
 // itself so it stays testable in isolation).
+// How many un-decided candidate stories a channel is allowed to have
+// sitting in the Story review queue before sourcing stops generating more
+// for it. Keeps the queue from flooding while you're away, and keeps
+// spend bounded even before the $ budget cap kicks in.
+const MAX_PENDING_STORIES_PER_CHANNEL = 3;
+
 async function processAgent(name, body = {}) {
+  if (name === 'sourcing') {
+    const { generateStory } = require('../integrations/agents/storyGenAgent');
+    const { scoreStory } = require('../integrations/agents/sourcingAgent');
+
+    const channels = db.prepare('SELECT * FROM channels WHERE active = 1').all();
+    if (channels.length === 0) return { message: 'No active channels - add one on the Channels page first.' };
+
+    for (const channel of channels) {
+      const pending = db
+        .prepare(`SELECT COUNT(*) as n FROM stories WHERE channel_id = ? AND produce_status = 'pending'`)
+        .get(channel.id).n;
+      if (pending >= MAX_PENDING_STORIES_PER_CHANNEL) continue; // this channel's queue is full, try the next one
+
+      try {
+        const result = await generateStory(channel.id);
+        logActivity(null, 'story_generated', `Auto-generated story ${result.storyId} for "${channel.name}" (${result.angle})`);
+        try {
+          const scoreResult = await scoreStory(result.storyId);
+          logActivity(null, 'story_scored', `Auto-scored story ${result.storyId}: ${scoreResult.score}/100`);
+          return { message: `Generated + scored a new story for "${channel.name}": ${scoreResult.score}/100. Check Story review.` };
+        } catch (e) {
+          logActivity(null, 'story_score_failed', `Story ${result.storyId} generated but scoring failed: ${e.message}`);
+          return { message: `Generated a story for "${channel.name}" but scoring failed: ${e.message}` };
+        }
+      } catch (e) {
+        return { message: `Could not generate a story for "${channel.name}": ${e.message}` };
+      }
+    }
+    return { message: 'Every active channel already has enough candidate stories waiting on your decision.' };
+  }
+
   if (name === 'script') {
     const video = db.prepare(`SELECT * FROM videos WHERE stage = 'sourced' ORDER BY created_at LIMIT 1`).get();
     if (!video) return { message: 'Nothing waiting - no videos at "sourced" stage.' };
@@ -76,11 +113,21 @@ async function processAgent(name, body = {}) {
       draftText = await mockDraftScript({ sourceText: story ? story.source_text : '', angle: story ? story.angle : '', persona: channel.persona });
       logSpend(video.id, video.channel_id, 'anthropic', 'script draft (test mode)', 0);
     } else {
+      checkBudget();
       const { draftScript } = require('../integrations/scriptgen');
       const result = await draftScript({ sourceText: story ? story.source_text : '', angle: story ? story.angle : '', persona: channel.persona });
       draftText = result.text;
       const cost = (result.inputTokens / 1000) * COST_MODEL.llmCostPer1kTokens + (result.outputTokens / 1000) * COST_MODEL.llmCostPer1kTokens;
       logSpend(video.id, video.channel_id, 'anthropic', `script draft (${result.inputTokens}in/${result.outputTokens}out tokens)`, Math.round(cost * 10000) / 10000);
+    }
+
+    // Auto-script mode: skip the human edit gate by promoting the draft
+    // straight to final. Deliberately leaves edited_by_human = 0 so the
+    // record honestly shows no human touched it.
+    if (isAutoScript()) {
+      db.prepare(`UPDATE videos SET script_draft = ?, script_final = ?, stage = 'scripted', updated_at = datetime('now') WHERE id = ?`).run(draftText, draftText, video.id);
+      logActivity(video.id, 'stage_change', 'Script drafted and auto-approved (auto-script mode is ON)');
+      return { message: `Drafted script for video ${video.id} (auto-script: no edit needed, voice can run).` };
     }
 
     db.prepare(`UPDATE videos SET script_draft = ?, stage = 'scripted', updated_at = datetime('now') WHERE id = ?`).run(draftText, video.id);
@@ -89,10 +136,11 @@ async function processAgent(name, body = {}) {
   }
 
   if (name === 'voice') {
-    const video = db.prepare(`SELECT * FROM videos WHERE stage = 'scripted' AND edited_by_human = 1 AND script_final IS NOT NULL ORDER BY updated_at LIMIT 1`).get();
+    const editGate = isAutoScript() ? '' : 'AND edited_by_human = 1';
+    const video = db.prepare(`SELECT * FROM videos WHERE stage = 'scripted' AND script_final IS NOT NULL ${editGate} ORDER BY updated_at LIMIT 1`).get();
     if (!video) {
       const unedited = db.prepare(`SELECT COUNT(*) as n FROM videos WHERE stage = 'scripted' AND (edited_by_human = 0 OR script_final IS NULL)`).get().n;
-      return { message: unedited > 0 ? `${unedited} script(s) waiting on YOUR edit before voice can run.` : 'Nothing waiting - no edited scripts ready for voice.' };
+      return { message: unedited > 0 && !isAutoScript() ? `${unedited} script(s) waiting on YOUR edit before voice can run.` : 'Nothing waiting - no scripts ready for voice.' };
     }
     const channel = db.prepare('SELECT * FROM channels WHERE id = ?').get(video.channel_id);
     const outDir = path.join(__dirname, '..', 'uploads', 'audio');
@@ -104,6 +152,7 @@ async function processAgent(name, body = {}) {
       await mockSynthesizeVoice({ outputPath });
       logSpend(video.id, video.channel_id, 'elevenlabs', 'voice synthesis (test mode)', 0);
     } else {
+      checkBudget();
       const { synthesizeVoice } = require('../integrations/tts');
       await synthesizeVoice({ scriptText: video.script_final, voiceId: channel.voice_id, outputPath });
       const cost = video.script_final.length * COST_MODEL.ttsCostPerCharacter;
@@ -129,6 +178,7 @@ async function processAgent(name, body = {}) {
       logSpend(video.id, video.channel_id, 'stability', `${imagesPerVideo} images (test mode)`, 0);
       db.prepare(`UPDATE videos SET images_dir = ?, visual_provider = 'mock', visual_cost = 0, updated_at = datetime('now') WHERE id = ?`).run(outDir, video.id);
     } else {
+      checkBudget();
       const { generateImages } = require('../integrations/visualgen');
       await generateImages({ scriptText: video.script_final, stylePrompt: channel.image_style_prompt, count: imagesPerVideo, outputDir: outDir });
       const cost = imagesPerVideo * COST_MODEL.imageCostPerImage;

@@ -13,13 +13,14 @@
 // (generated after upload) are a real fallback, not a placeholder.
 
 const { execFile } = require('child_process');
+const { ffmpegPath, ffprobePath } = require('../config/ffmpeg');
 const fs = require('fs');
 const path = require('path');
 const util = require('util');
 const execFileAsync = util.promisify(execFile);
 
 function getAudioDuration(audioPath) {
-  return execFileAsync('ffprobe', [
+  return execFileAsync(ffprobePath, [
     '-v', 'error',
     '-show_entries', 'format=duration',
     '-of', 'default=noprint_wrappers=1:nokey=1',
@@ -42,7 +43,7 @@ async function assembleVideo({ audioPath, imagePaths, outputPath }) {
     .join('\n') + `\nfile '${path.resolve(imagePaths[imagePaths.length - 1])}'\n`; // ffmpeg concat quirk: last entry needs no duration line after it, repeat last file
   fs.writeFileSync(listFile, listContent);
 
-  await execFileAsync('ffmpeg', [
+  await execFileAsync(ffmpegPath, [
     '-y',
     '-f', 'concat', '-safe', '0', '-i', listFile,
     '-i', audioPath,

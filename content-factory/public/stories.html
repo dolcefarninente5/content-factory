@@ -29,8 +29,10 @@
     <h2>Submit a new story</h2>
     <div class="form-card">
       <select id="newChannel"></select>
+      <button class="run-btn" onclick="generateStory()" style="margin-bottom:6px">Generate an original story with AI</button>
+      <p class="subtitle" style="margin:0 0 8px 0;font-size:12px">Generates a fully original fictional Darija story (never scraped from other authors' work) and auto-scores it.</p>
       <textarea id="newAngle" placeholder="Angle (optional, e.g. 'betrayal', 'witchcraft', 'family scandal')"></textarea>
-      <textarea id="newSource" placeholder="Paste the raw submitted story text here" style="min-height:100px"></textarea>
+      <textarea id="newSource" placeholder="Or paste a story someone submitted to you here" style="min-height:100px"></textarea>
       <button onclick="addStory()">Submit story</button>
     </div>
   </main>
@@ -117,6 +119,24 @@
         body: JSON.stringify({ reason }),
       });
       document.getElementById(`story-${id}`).remove();
+    }
+
+    async function generateStory() {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+      const res = await fetch('/api/stories/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel_id: document.getElementById('newChannel').value }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || 'Generation failed');
+      }
+      btn.disabled = false;
+      btn.textContent = 'Generate an original story with AI';
+      setTimeout(load, 1200); // give auto-scoring a moment
     }
 
     async function addStory() {

@@ -143,4 +143,18 @@ const insertAgent = db.prepare(
 );
 for (const a of AGENTS) insertAgent.run(a);
 
+// Auto-seed starter channels if the database is completely empty - this
+// used to require manually running `node db/seed.js`, which is easy to
+// forget on a fresh deploy (e.g. a host whose start command is just
+// `npm start`). Runs once, harmlessly no-ops after that.
+const channelCount = db.prepare('SELECT COUNT(*) as c FROM channels').get().c;
+if (channelCount === 0) {
+  const insertChannel = db.prepare(
+    `INSERT INTO channels (name, persona, voice_id, upload_days) VALUES (?, ?, ?, ?)`
+  );
+  insertChannel.run('Channel 1 - Placeholder', 'Describe the narrator persona and tone here', 'voice_1', 'mon,thu');
+  insertChannel.run('Channel 2 - Placeholder', 'Describe the narrator persona and tone here', 'voice_2', 'tue,fri');
+  insertChannel.run('Channel 3 - Placeholder', 'Describe the narrator persona and tone here', 'voice_3', 'wed,sat');
+}
+
 module.exports = db;

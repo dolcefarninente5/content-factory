@@ -305,9 +305,6 @@ app.get('/api/agents', (req, res) => {
 // partway through a batch).
 app.post('/api/agents/:name/run', async (req, res) => {
   const { name } = req.params;
-  if (name === 'sourcing') {
-    return res.status(400).json({ error: 'Run sourcing per-story from the Story review page, not globally.' });
-  }
   setAgentStatus(name, 'running', 'Started manually from dashboard');
   try {
     const { message } = await processAgent(name, req.body);
@@ -325,7 +322,7 @@ app.post('/api/agents/:name/run', async (req, res) => {
 // (e.g. voice still refuses unedited scripts) - this doesn't bypass any
 // gate, it just saves the clicking.
 app.post('/api/agents/run-all', async (req, res) => {
-  const order = ['script', 'voice', 'visual', 'assembly', 'publish'];
+  const order = ['sourcing', 'script', 'voice', 'visual', 'assembly', 'publish'];
   const results = {};
   for (const name of order) {
     setAgentStatus(name, 'running', 'Started via run-all');
@@ -343,8 +340,13 @@ app.post('/api/agents/run-all', async (req, res) => {
 
 // ---- Settings (test mode, YouTube client credentials) ----
 app.get('/api/settings', (req, res) => {
+  const { getBudgetLimit } = require('./config/settings');
+  const spent = db.prepare(`SELECT COALESCE(SUM(amount),0) as t FROM spend_log WHERE test_mode = 0`).get().t;
   res.json({
     testMode: isTestMode(),
+    autoScript: require('./config/settings').isAutoScript(),
+    budgetLimit: getBudgetLimit(),
+    budgetSpent: spent,
     ytClientId: getSetting('yt_client_id', ''),
     ytClientConfigured: !!(getSetting('yt_client_id') && getSetting('yt_client_secret')),
   });
@@ -354,9 +356,55 @@ app.post('/api/settings', (req, res) => {
   if (typeof req.body.testMode === 'boolean') {
     setSetting('test_mode', req.body.testMode ? 'true' : 'false');
   }
+  if (typeof req.body.autoScript === 'boolean') {
+    setSetting('auto_script', req.body.autoScript ? 'true' : 'false');
+  }
+  if (req.body.budgetLimit !== undefined && !isNaN(parseFloat(req.body.budgetLimit))) {
+    setSetting('budget_limit_usd', parseFloat(req.body.budgetLimit));
+  }
   if (req.body.ytClientId) setSetting('yt_client_id', req.body.ytClientId);
   if (req.body.ytClientSecret) setSetting('yt_client_secret', req.body.ytClientSecret);
   res.json({ ok: true });
+});
+
+// ---- Story generation (original AI stories, not scraped content) ----
+app.post('/api/stories/generate', async (req, res) => {
+  const { generateStory } = require('./integrations/agents/storyGenAgent');
+  const channelId = req.body.channel_id;
+  if (!channelId) return res.status(400).json({ error: 'channel_id required' });
+  setAgentStatus('sourcing', 'running', `Generating a story for channel ${channelId}`);
+  try {
+    const result = await generateStory(channelId);
+    setAgentStatus('sourcing', 'ok', `Generated story ${result.storyId} (${result.angle})`);
+    // Auto-score it, same as a submitted story
+    scoreStory(result.storyId)
+      .then((r) => setAgentStatus('sourcing', 'ok', `Generated + scored story ${result.storyId}: ${r.score}/100`))
+      .catch((e) => setAgentStatus('sourcing', 'needs_setup', e.message));
+    res.json(result);
+  } catch (e) {
+    setAgentStatus('sourcing', 'needs_setup', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---- Self-diagnostics: what's configured, what's missing, what's broken ----
+app.get('/api/diagnostics', async (req, res) => {
+  const { execFile } = require('child_process');
+  const ffmpegOk = await new Promise((resolve) => {
+    execFile(require('./config/ffmpeg').ffmpegPath, ['-version'], (err) => resolve(!err));
+  });
+  const channelCount = db.prepare('SELECT COUNT(*) as c FROM channels').get().c;
+  const checks = [
+    { name: 'Server running', ok: true, detail: 'You are seeing this, so yes' },
+    { name: 'Database writable', ok: true, detail: `${channelCount} channel(s) present` },
+    { name: 'ffmpeg available (video assembly)', ok: ffmpegOk, detail: ffmpegOk ? 'Found' : 'MISSING - video assembly will fail on this host' },
+    { name: 'Anthropic key (script/story/scoring in Real Mode)', ok: !!process.env.ANTHROPIC_API_KEY, detail: process.env.ANTHROPIC_API_KEY ? 'Set' : 'Not set - Real Mode script stages will fail' },
+    { name: 'ElevenLabs key (voice in Real Mode)', ok: !!process.env.ELEVENLABS_API_KEY, detail: process.env.ELEVENLABS_API_KEY ? 'Set' : 'Not set - Real Mode voice will fail' },
+    { name: 'Stability key (visuals in Real Mode)', ok: !!process.env.STABILITY_API_KEY, detail: process.env.STABILITY_API_KEY ? 'Set' : 'Not set - Real Mode visuals will fail' },
+    { name: 'YouTube client credentials', ok: !!(getSetting('yt_client_id') && getSetting('yt_client_secret')), detail: (getSetting('yt_client_id') && getSetting('yt_client_secret')) ? 'Set' : 'Not set - publishing disabled (fine during test phase)' },
+    { name: 'Test Mode', ok: true, detail: isTestMode() ? 'ON - everything free and fake' : 'OFF - real spend active' },
+  ];
+  res.json({ checks });
 });
 
 // ---- YouTube connect (browser OAuth flow, replaces the CLI script) ----
@@ -451,16 +499,20 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ---- Background automation ----
-// Runs script/voice/visual/assembly/publish automatically on a timer, so
-// the pipeline keeps moving between the two human gates (story approval,
-// video approval) without you having to click "Run now" all day. Set
-// AUTO_RUN_ENABLED=false in .env to turn this off entirely and only run
-// agents manually from the dashboard.
+// Runs sourcing/script/voice/visual/assembly/publish automatically on a
+// timer, so the pipeline keeps moving between the two human gates (story
+// approval, video approval) without you having to click "Run now" all
+// day. 'sourcing' proposes new candidate stories on its own (capped per
+// channel - see MAX_PENDING_STORIES_PER_CHANNEL in processAgent.js) so
+// you never have to write or manually trigger a story yourself - you
+// still have to approve each one for production, which is the actual
+// spend gate. Set AUTO_RUN_ENABLED=false in .env to turn all of this off
+// and run agents manually from the dashboard instead.
 const AUTO_RUN_ENABLED = process.env.AUTO_RUN_ENABLED !== 'false';
 const AUTO_RUN_INTERVAL_MINUTES = parseFloat(process.env.AUTO_RUN_INTERVAL_MINUTES || '15');
 
 if (AUTO_RUN_ENABLED) {
-  const stages = ['script', 'voice', 'visual', 'assembly', 'publish'];
+  const stages = ['sourcing', 'script', 'voice', 'visual', 'assembly', 'publish'];
   setInterval(async () => {
     for (const name of stages) {
       try {
