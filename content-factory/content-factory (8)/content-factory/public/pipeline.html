@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Content Factory - Pipeline</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <nav class="topnav">
+    <div class="brand">Content Factory</div>
+    <div class="navlinks">
+      <a href="/index.html">Overview</a>
+      <a href="/stories.html">Story review</a>
+      <a href="/queue.html">Approval queue</a>
+      <a href="/agents.html">Agents</a>
+      <a href="/analytics.html">Analytics</a>
+      <a href="/pipeline.html" class="active">Pipeline</a>
+      <a href="/channels.html">Channels</a>
+      <a href="/settings.html">Settings</a>
+    </div>
+    <button class="logout" onclick="logout()">Log out</button>
+  </nav>
+
+  <main class="page">
+    <h1>Pipeline</h1>
+    <p class="subtitle">Every video currently in progress, whichever stage it's at. Use this to manually attach a script, audio, or video file for testing - useful before your voice/visual providers are wired up, or any time you want to override an agent's output by hand.</p>
+    <div id="pipelineList"></div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    async function load() {
+      const videos = await api('/api/videos');
+      const inProgress = (videos || []).filter(v => !['published','rejected'].includes(v.stage));
+      const container = document.getElementById('pipelineList');
+      if (inProgress.length === 0) {
+        container.innerHTML = '<p class="empty">Nothing in progress. Approve a story on the Story review page to start one.</p>';
+        return;
+      }
+      container.innerHTML = inProgress.map(v => `
+        <div class="review-card" id="pv-${v.id}">
+          <div class="review-header">
+            <span class="channel-tag">${v.channel_name}</span>
+            <span class="badge badge-gray">${v.stage.replace('_',' ')}</span>
+            <span class="video-title">${v.title || '(untitled)'} - #${v.id}</span>
+          </div>
+
+          <details ${!v.script_final ? 'open' : ''}>
+            <summary>Script</summary>
+            <textarea id="script-${v.id}" style="width:100%;min-height:100px;margin-top:8px">${(v.script_final || v.script_draft || '')}</textarea>
+            <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:13px">
+              <input type="checkbox" id="edited-${v.id}" ${v.edited_by_human ? 'checked' : ''}> I've edited this script myself
+            </label>
+            <button class="run-btn" onclick="saveScript(${v.id})">Save script</button>
+          </details>
+
+          <details>
+            <summary>Attach files manually (audio / images / final video)</summary>
+            <div class="manual-attach">
+              <label>Audio (voice narration): <input type="file" id="audio-${v.id}" accept="audio/*"></label>
+              <button class="run-btn" onclick="uploadAndAttach(${v.id}, 'audio')">Upload audio</button>
+            </div>
+            <div class="manual-attach">
+              <label>Final video file: <input type="file" id="video-${v.id}" accept="video/*"></label>
+              <button class="run-btn" onclick="uploadAndAttach(${v.id}, 'video')">Upload video (moves to pending_review)</button>
+            </div>
+          </details>
+
+          <div class="button-row" style="margin-top:10px">
+            <select id="stage-${v.id}">
+              ${['sourced','scripted','voiced','assembled','pending_review','approved'].map(s => `<option value="${s}" ${s===v.stage?'selected':''}>${s}</option>`).join('')}
+            </select>
+            <button class="run-btn" onclick="setStage(${v.id})">Move to selected stage</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function saveScript(id) {
+      const script_final = document.getElementById(`script-${id}`).value;
+      const edited_by_human = document.getElementById(`edited-${id}`).checked ? 1 : 0;
+      await fetch(`/api/videos/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script_final, edited_by_human }),
+      });
+      load();
+    }
+
+    async function uploadAndAttach(id, kind) {
+      const fileInput = document.getElementById(`${kind}-${id}`);
+      if (!fileInput.files[0]) { alert('Choose a file first'); return; }
+      const form = new FormData();
+      form.append('file', fileInput.files[0]);
+      const uploadRes = await fetch(`/api/upload-file?kind=${kind === 'audio' ? 'audio' : 'video'}`, { method: 'POST', body: form });
+      const { path } = await uploadRes.json();
+
+      const patch = kind === 'audio'
+        ? { voice_file_path: path, stage: 'voiced' }
+        : { video_file_path: path, stage: 'pending_review' };
+
+      await fetch(`/api/videos/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      load();
+    }
+
+    async function setStage(id) {
+      const stage = document.getElementById(`stage-${id}`).value;
+      await fetch(`/api/videos/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage }),
+      });
+      load();
+    }
+
+    load();
+  </script>
+</body>
+</html>
