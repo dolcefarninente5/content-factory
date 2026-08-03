@@ -50,13 +50,19 @@
     async function load() {
       const channels = await api('/api/channels');
       document.getElementById('channelList').innerHTML = channels.map(ch => `
-        <div class="channel-detail-card">
+        <div class="channel-detail-card" id="channel-${ch.id}">
           <h3>${ch.name} ${ch.active ? '' : '<span class="inactive-tag">inactive</span>'}</h3>
-          <p><strong>Persona:</strong> ${ch.persona || '(not set)'}</p>
-          <p><strong>Voice ID:</strong> ${ch.voice_id || '(not set)'}</p>
-          <p><strong>Visual style:</strong> ${ch.image_style_prompt || '(not set)'}</p>
-          <p><strong>Upload days:</strong> ${ch.upload_days}</p>
-          <p>
+          <label>Name<br><input id="name-${ch.id}" value="${(ch.name||'').replace(/"/g,'&quot;')}" style="width:100%;margin-top:4px" /></label>
+          <label style="display:block;margin-top:8px">Persona / tone<br><textarea id="persona-${ch.id}" style="width:100%;margin-top:4px">${ch.persona || ''}</textarea></label>
+          <label style="display:block;margin-top:8px">Voice ID (from ElevenLabs)<br><input id="voice-${ch.id}" value="${(ch.voice_id||'').replace(/"/g,'&quot;')}" style="width:100%;margin-top:4px" /></label>
+          <label style="display:block;margin-top:8px">Visual style<br><textarea id="style-${ch.id}" style="width:100%;margin-top:4px">${ch.image_style_prompt || ''}</textarea></label>
+          <label style="display:block;margin-top:8px">Upload days (e.g. mon,thu)<br><input id="days-${ch.id}" value="${(ch.upload_days||'').replace(/"/g,'&quot;')}" style="width:100%;margin-top:4px" /></label>
+          <label style="display:block;margin-top:8px"><input type="checkbox" id="active-${ch.id}" ${ch.active ? 'checked' : ''} /> Active</label>
+          <div style="margin-top:10px">
+            <button onclick="saveChannel(${ch.id})">Save changes</button>
+            <span id="saved-${ch.id}" style="margin-left:8px;font-size:12px;color:green"></span>
+          </div>
+          <p style="margin-top:10px">
             <strong>YouTube:</strong>
             ${ch.youtube_refresh_token
               ? '<span class="badge badge-green">connected</span>'
@@ -64,6 +70,30 @@
           </p>
         </div>
       `).join('') || '<p class="empty">No channels yet.</p>';
+    }
+
+    async function saveChannel(id) {
+      const body = {
+        name: document.getElementById(`name-${id}`).value,
+        persona: document.getElementById(`persona-${id}`).value,
+        voice_id: document.getElementById(`voice-${id}`).value,
+        image_style_prompt: document.getElementById(`style-${id}`).value,
+        upload_days: document.getElementById(`days-${id}`).value,
+        active: document.getElementById(`active-${id}`).checked,
+      };
+      const res = await fetch(`/api/channels/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const label = document.getElementById(`saved-${id}`);
+      if (res.ok) {
+        label.textContent = 'Saved ✓';
+        setTimeout(() => { label.textContent = ''; }, 2000);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Save failed');
+      }
     }
 
     async function addChannel() {

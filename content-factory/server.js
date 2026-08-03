@@ -83,10 +83,10 @@ app.post('/api/channels', (req, res) => {
 });
 
 app.put('/api/channels/:id', (req, res) => {
-  const { name, persona, voice_id, upload_days, active } = req.body;
+  const { name, persona, voice_id, upload_days, active, image_style_prompt } = req.body;
   db.prepare(
-    'UPDATE channels SET name=?, persona=?, voice_id=?, upload_days=?, active=? WHERE id=?'
-  ).run(name, persona, voice_id, upload_days, active ? 1 : 0, req.params.id);
+    'UPDATE channels SET name=?, persona=?, voice_id=?, upload_days=?, active=?, image_style_prompt=? WHERE id=?'
+  ).run(name, persona, voice_id, upload_days, active ? 1 : 0, image_style_prompt || '', req.params.id);
   res.json({ ok: true });
 });
 
