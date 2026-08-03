@@ -34,19 +34,15 @@ async function generateImages({ scriptText, stylePrompt, count = 6, outputDir })
     throw new Error('STABILITY_API_KEY not set in .env');
   }
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-
   const scenes = splitIntoScenes(scriptText, count);
   const paths = [];
 
-  for (let i = 0; i < scenes.length; i++) {
-    const prompt = `${stylePrompt || 'cinematic, realistic, warm lighting'}. Scene: ${scenes[i]}`.slice(0, 900);
-
+  async function requestImage(prompt) {
     const form = new FormData();
     form.append('prompt', prompt);
     form.append('output_format', 'png');
     form.append('aspect_ratio', '16:9');
-
-    const response = await fetch('https://api.stability.ai/v2beta/stable-image/generate/core', {
+    return fetch('https://api.stability.ai/v2beta/stable-image/generate/core', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${STABILITY_API_KEY}`,
@@ -54,10 +50,20 @@ async function generateImages({ scriptText, stylePrompt, count = 6, outputDir })
       },
       body: form,
     });
+  }
+
+  for (let i = 0; i < scenes.length; i++) {
+    const primaryPrompt = `${stylePrompt || 'cinematic, realistic, warm lighting'}. Scene: ${scenes[i]}`.slice(0, 900);
+    let response = await requestImage(primaryPrompt);
+
+    if (!response.ok && response.status === 403) {
+      const fallbackPrompt = `${stylePrompt || 'cinematic, realistic, warm lighting'}. Scene: a quiet establishing shot related to the story, no violence, no explicit content, tasteful and calm.`.slice(0, 900);
+      response = await requestImage(fallbackPrompt);
+    }
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`Stability AI error on scene ${i + 1}/${scenes.length}: ${response.status} ${errText}`);
+      throw new Error(`Stability AI error on scene ${i + 1}/${scenes.length} (retry with neutral fallback also failed): ${response.status} ${errText}`);
     }
 
     const buf = Buffer.from(await response.arrayBuffer());
